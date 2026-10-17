@@ -60,7 +60,12 @@ export function getToolchainEnv() {
       await writeFile(path.join(SHIMS, "composer"), `#!/bin/sh\nexec php "${composerPhar.replaceAll("\\", "/")}" "$@"\n`);
       extra.unshift(SHIMS);
     }
-    return withPath(extra);
+    // Herd's PHP caps memory at 128 MB, which larger test runs exceed; raise it for agents only via
+    // an extra ini folder (the leading separator keeps PHP's default scan folder too)
+    const iniDir = path.join(ROOT, "php");
+    await mkdir(iniDir, { recursive: true });
+    await writeFile(path.join(iniDir, "mission-control.ini"), "memory_limit = 2G\n");
+    return { ...withPath(extra), PHP_INI_SCAN_DIR: `${path.delimiter}${iniDir}` };
   })();
   return toolchainEnv;
 }

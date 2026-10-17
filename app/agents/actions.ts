@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { eq } from "drizzle-orm";
 import { agents, db } from "@/db";
 import { MODEL_CHOICES } from "@/lib/agent-models";
+import { SKILL_IDS } from "@/lib/skill-catalog";
 import { decideApproval } from "@/lib/orchestrator/approvals";
 import { cancelTask as cancelTaskRun, retrySubtask as retrySubtaskRun, retryWorkspace as retryWorkspaceRun } from "@/lib/orchestrator/dispatcher";
 import { newConversation, sendToLead, stopLead } from "@/lib/orchestrator/lead";
@@ -53,4 +54,11 @@ export async function stopWorker(agentId: number) {
 
 export async function retryWorkspace(taskId: number) {
   return retryWorkspaceRun(taskId);
+}
+
+export async function setAgentSkills(agentId: number, skills: string[]): Promise<{ error?: string }> {
+  const valid = skills.filter((id): id is (typeof SKILL_IDS)[number] => (SKILL_IDS as string[]).includes(id));
+  await db.update(agents).set({ skills: [...new Set(valid)] }).where(eq(agents.id, agentId));
+  revalidatePath("/dashboard/agents");
+  return {};
 }

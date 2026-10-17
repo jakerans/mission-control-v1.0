@@ -8,7 +8,7 @@ import { ROLE_LABELS } from "@/lib/agents";
 
 // Never allowed, in any mode: anything that leaves this PC or rewrites shared history, Forge
 // (production deploys), and git operations that would move work off the task's branch.
-export const WORKER_DENIED = [
+export const WORKER_DENIED_COMMANDS = [
   "git push",
   "git remote",
   "git merge",
@@ -23,7 +23,9 @@ export const WORKER_DENIED = [
   "forge.bat",
   "ssh",
   "scp",
-].flatMap((cmd) => [`Bash(${cmd})`, `Bash(${cmd} *)`]);
+];
+// Also denied when typed through RTK ("rtk git push …")
+export const WORKER_DENIED = WORKER_DENIED_COMMANDS.flatMap((cmd) => [cmd, `rtk ${cmd}`]).flatMap((cmd) => [`Bash(${cmd})`, `Bash(${cmd} *)`]);
 
 export function workerTools(role: Agent["role"]) {
   // The reviewer reads and runs checks but doesn't edit

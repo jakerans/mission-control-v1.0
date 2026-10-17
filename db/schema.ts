@@ -60,6 +60,8 @@ export const agents = pgTable(
     model: text("model"),
     // Capabilities the orchestrator grants this agent, e.g. "read_repo", "write_worktree", "open_pr"
     permissions: jsonb("permissions").$type<string[]>().notNull().default([]),
+    // Skills switched on for this agent (ids from lib/agent-skills.ts), e.g. "rtk", "ponytail"
+    skills: jsonb("skills").$type<string[]>().notNull().default([]),
     desk: integer("desk"),
     // Kept current by the orchestrator from the agent's runs; the office renders it
     status: text("status", { enum: AGENT_STATUSES }).notNull().default("idle"),

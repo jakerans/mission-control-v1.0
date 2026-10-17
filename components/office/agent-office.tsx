@@ -46,11 +46,13 @@ const STATUS_TEXT: Partial<Record<AgentStatus, string>> = {
 const AGENT_MARGIN = 40;
 // The characters are drawn from behind, seated, with their heads a little left of centre
 const HEAD_X = 0.4;
+// Where the animated upper body fades into the steady chair and legs (fraction of sprite height)
+const UPPER_BODY_MASK = "linear-gradient(to bottom, #000 0%, #000 52%, transparent 66%)";
 
 // Renders an office: the background (still or looping video) plus each agent at its seat, playing its
 // animation. Agents are laid out in percentages of an aspect-locked stage, so they never drift off their
 // desks; the stage itself is sized with container query units to fit (or cover) whatever box it's given.
-export function AgentOffice({ scene, fit = "contain", fps = 8, showNames = true, playVideo = true, team, className }: Props) {
+export function AgentOffice({ scene, fit = "contain", fps = 6, showNames = true, playVideo = true, team, className }: Props) {
   const [ready, setReady] = useState(false);
   const seated: Seated[] = team
     ? scene.agents.flatMap((seat, desk) => {
@@ -236,17 +238,23 @@ function AgentSprite({ agent, fps, animate }: { agent: OfficeAgent; fps: number;
     };
   }, [frames, fps, animate]);
 
+  // The AI-drawn frames each redraw the chair and legs slightly differently, which makes them wobble.
+  // So the first frame is the steady base, and the animation plays only over the upper body, fading
+  // into the base across a soft band so there's no visible seam.
   return (
     <div className={cn("absolute inset-0 origin-bottom", !animate && "motion-safe:animate-[breathe_4s_ease-in-out_infinite]")}>
-      {frames.map((src, i) => (
-        <img
-          key={src}
-          src={src}
-          alt=""
-          draggable={false}
-          className={cn("pointer-events-none absolute inset-0 size-full object-contain", i !== frame && "invisible")}
-        />
-      ))}
+      <img src={frames[0]} alt="" draggable={false} className="pointer-events-none absolute inset-0 size-full object-contain" />
+      {animate &&
+        frames.map((src, i) => (
+          <img
+            key={src}
+            src={src}
+            alt=""
+            draggable={false}
+            style={{ maskImage: UPPER_BODY_MASK, WebkitMaskImage: UPPER_BODY_MASK }}
+            className={cn("pointer-events-none absolute inset-0 size-full object-contain", i !== frame && "invisible")}
+          />
+        ))}
     </div>
   );
 }

@@ -2,6 +2,7 @@ import { createSdkMcpServer, query, type SDKMessage } from "@anthropic-ai/claude
 import { and, eq, inArray, notInArray } from "drizzle-orm";
 import { agents, db, events, runs, type Agent } from "@/db";
 import { agentAuth } from "@/lib/agent-auth";
+import { rtkHooks, skillInstructions, withRtkOnPath } from "@/lib/agent-skills";
 import type { EFFORT_LEVELS } from "@/lib/agent-models";
 import { recordRateLimit, refreshPlanUsage } from "@/lib/plan-usage";
 
@@ -33,6 +34,8 @@ export type SessionSpec = {
   systemPromptAppend: string;
   // Extra environment for the session, e.g. PATH additions for the project's toolchain
   env?: Record<string, string>;
+  // Commands the agent is denied (prefixes of its "Bash(<cmd> *)" rules), so skills never rewrite them
+  deniedCommands?: string[];
 };
 
 export type SessionOutcome = { runId: number; ok: boolean; cancelled: boolean; error: string | null };
@@ -101,6 +104,14 @@ async function execute(spec: SessionSpec, runId: number, abort: AbortController)
   const base = { projectId: spec.projectId, agentId: spec.agent.id, runId, taskId: spec.taskId ?? null };
   try {
     const tools = spec.mcpTools?.(runId) ?? [];
+    const skills = spec.agent.skills ?? [];
+    const rtk = skills.includes("rtk");
+    const env: Record<string, string | undefined> = {
+      ...process.env,
+      ...spec.env,
+      // On the Claude login, hide any API key so the session can't bill it by accident
+      ...(agentAuth() === "claude_login" ? { ANTHROPIC_API_KEY: undefined } : {}),
+    };
     const session = query({
       prompt: spec.prompt,
       options: {
@@ -123,13 +134,9 @@ async function execute(spec: SessionSpec, runId: number, abort: AbortController)
         // claude.ai connectors (their tool definitions alone were ~400k tokens per request)
         strictMcpConfig: true,
         settings: { disableClaudeAiConnectors: true },
-        env: {
-          ...process.env,
-          ...spec.env,
-          // On the Claude login, hide any API key so the session can't bill it by accident
-          ...(agentAuth() === "claude_login" ? { ANTHROPIC_API_KEY: undefined } : {}),
-        },
-        systemPrompt: { type: "preset", preset: "claude_code", append: spec.systemPromptAppend },
+        env: rtk ? withRtkOnPath(env) : env,
+        hooks: rtk ? { PreToolUse: rtkHooks(spec.deniedCommands ?? []) } : undefined,
+        systemPrompt: { type: "preset", preset: "claude_code", append: spec.systemPromptAppend + skillInstructions(skills, spec.agent.role) },
       },
     });
 

@@ -10,6 +10,7 @@ import { getOfficeScene } from "@/lib/offices";
 import { getActiveProject } from "@/lib/projects";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
+import { SkillToggles } from "@/components/agents/skill-toggles";
 
 export const metadata: Metadata = { title: "Agents · Mission Control" };
 
@@ -85,6 +86,11 @@ export default async function AgentsPage() {
                   {permissionLabel(permission)}
                 </Badge>
               ))}
+            </div>
+
+            {/* Above the card-wide link so the toggles stay clickable */}
+            <div className="relative z-10 mt-3">
+              <SkillToggles agentId={agent.id} skills={agent.skills} />
             </div>
 
             <details className="group relative z-10 mt-auto pt-4">

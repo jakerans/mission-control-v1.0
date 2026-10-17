@@ -19,7 +19,8 @@ const MAX_TURNS = 80;
 
 // Read-only git commands the lead may run without asking
 const GIT_READ_COMMANDS = ["log", "show", "diff", "status", "ls-files", "blame", "branch", "rev-parse"];
-const ALLOWED_TOOLS = ["Read", "Glob", "Grep", ...GIT_READ_COMMANDS.map((cmd) => `Bash(git ${cmd} *)`)];
+// With the RTK skill these run as "rtk git <cmd>", so allow that form too
+const ALLOWED_TOOLS = ["Read", "Glob", "Grep", ...GIT_READ_COMMANDS.flatMap((cmd) => [`Bash(git ${cmd} *)`, `Bash(rtk git ${cmd} *)`])];
 
 export const isLeadRunning = isAgentRunning;
 

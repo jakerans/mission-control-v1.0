@@ -1,7 +1,7 @@
 import { asc, eq } from "drizzle-orm";
 import { agents, db, type Agent, type AgentRole, type AgentStatus } from "@/db";
 
-type TeamMember = Pick<Agent, "name" | "role" | "description" | "instructions" | "permissions" | "model">;
+type TeamMember = Pick<Agent, "name" | "role" | "description" | "instructions" | "permissions" | "model" | "skills">;
 
 // Every software project starts with this team: a lead who plans and coordinates, and three workers
 // for the plan → build → test → review loop. None of them can merge or deploy; those stay with the
@@ -22,6 +22,7 @@ export const DEFAULT_TEAM: TeamMember[] = [
       "Reconcile their results into one pull request and one summary. Never merge, deploy or run migrations against shared databases.",
     ].join("\n"),
     permissions: ["read_repo", "plan_tasks", "delegate", "request_approval", "open_pr"],
+    skills: ["rtk", "ponytail"],
   },
   {
     name: "Milo",
@@ -34,6 +35,7 @@ export const DEFAULT_TEAM: TeamMember[] = [
       "Report the changed files, how you verified them, and anything unresolved. Never push to the default branch.",
     ].join("\n"),
     permissions: ["read_repo", "write_worktree", "run_tests", "commit_branch"],
+    skills: ["rtk", "caveman", "ponytail"],
   },
   {
     name: "Ivy",
@@ -45,6 +47,7 @@ export const DEFAULT_TEAM: TeamMember[] = [
       "Report exactly which commands you ran, what passed, what failed, and any behaviour that still needs a human to check.",
     ].join("\n"),
     permissions: ["read_repo", "write_worktree", "run_tests", "commit_branch"],
+    skills: ["rtk", "caveman"],
   },
   {
     name: "Rex",
@@ -56,6 +59,7 @@ export const DEFAULT_TEAM: TeamMember[] = [
       "Do not edit code. Report findings ranked by severity, each with the file, the problem and a concrete failure scenario.",
     ].join("\n"),
     permissions: ["read_repo", "run_tests"],
+    skills: ["rtk", "ponytail"],
   },
 ];
 

@@ -4,7 +4,7 @@ import { DEFAULT_MODEL } from "@/lib/agent-models";
 import { getPlanUsage } from "@/lib/plan-usage";
 import { refreshLeadStatus } from "@/lib/orchestrator/lead";
 import { activeRunCount, isAgentRunning, logEvent, settleOrphanedRuns, startSession, stopAgentRun } from "@/lib/orchestrator/session";
-import { reportResultTool, WORKER_DENIED, workerPrompt, workerTools, type WorkerReport } from "@/lib/orchestrator/workers";
+import { reportResultTool, WORKER_DENIED, WORKER_DENIED_COMMANDS, workerPrompt, workerTools, type WorkerReport } from "@/lib/orchestrator/workers";
 import { commitLeftovers, diffSummary, getToolchainEnv, prepareWorkspace, removeWorkspace } from "@/lib/orchestrator/workspace";
 
 // The background worker loop. Every few seconds it:
@@ -166,6 +166,7 @@ async function runSubtask(agent: Agent, parent: Task, subtask: Task) {
     tools,
     allowedTools,
     disallowedTools: WORKER_DENIED,
+    deniedCommands: WORKER_DENIED_COMMANDS,
     mcpTools: (runId) => [reportResultTool({ agent, project, subtask, runId, onReport: (r) => (report = r) })],
     systemPromptAppend: workerPrompt({
       agent,
