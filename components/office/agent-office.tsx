@@ -2,8 +2,12 @@
 
 /* eslint-disable @next/next/no-img-element -- scene images are pre-sized sprites served from our own API */
 import { useEffect, useRef, useState } from "react";
+import type { AgentStatus } from "@/db/schema";
 import type { OfficeAgent, OfficeScene } from "@/lib/offices";
 import { cn } from "@/lib/utils";
+
+// A project's agent, placed at the office seat matching its desk number
+export type OfficeTeamMember = { desk: number; name: string; role: string; status: AgentStatus };
 
 type Props = {
   scene: OfficeScene;
@@ -16,7 +20,25 @@ type Props = {
   showNames?: boolean;
   // Play the looping background video when the office has one (falls back to the still image)
   playVideo?: boolean;
+  // The project's real team. When given, only seated agents appear and their status drives the
+  // animation; without it (office previews) every seat shows its character at work.
+  team?: OfficeTeamMember[];
   className?: string;
+};
+
+type Seated = { seat: OfficeAgent; name: string; role?: string; status: AgentStatus };
+
+const STATUS_DOT: Record<AgentStatus, string> = {
+  idle: "bg-muted-foreground/50",
+  working: "bg-emerald-500 animate-pulse",
+  blocked: "bg-red-500",
+  needs_approval: "bg-amber-500 animate-pulse",
+  offline: "bg-muted-foreground/30",
+};
+
+const STATUS_TEXT: Partial<Record<AgentStatus, string>> = {
+  blocked: "Blocked",
+  needs_approval: "Needs you",
 };
 
 // Scene pixels kept around the outermost agents when cropping in "cover" mode
@@ -27,8 +49,14 @@ const HEAD_X = 0.4;
 // Renders an office: the background (still or looping video) plus each agent at its seat, playing its
 // animation. Agents are laid out in percentages of an aspect-locked stage, so they never drift off their
 // desks; the stage itself is sized with container query units to fit (or cover) whatever box it's given.
-export function AgentOffice({ scene, fit = "contain", fps = 8, showNames = true, playVideo = true, className }: Props) {
+export function AgentOffice({ scene, fit = "contain", fps = 8, showNames = true, playVideo = true, team, className }: Props) {
   const [ready, setReady] = useState(false);
+  const seated: Seated[] = team
+    ? scene.agents.flatMap((seat, desk) => {
+        const member = team.find((m) => m.desk === desk);
+        return member ? [{ seat, name: member.name, role: member.role, status: member.status }] : [];
+      })
+    : scene.agents.map((seat) => ({ seat, name: seat.name, status: "working" as const }));
   const backgroundRef = useRef<HTMLImageElement>(null);
   const video = playVideo ? scene.video : null;
 
@@ -62,7 +90,7 @@ export function AgentOffice({ scene, fit = "contain", fps = 8, showNames = true,
   return (
     <div
       role="img"
-      aria-label={`${scene.name} with ${scene.agents.length} AI agents at work`}
+      aria-label={`${scene.name} with ${seated.length} AI agents`}
       className={cn("relative w-full overflow-hidden bg-muted select-none", !ready && "animate-pulse", className)}
       style={{ containerType: "size", aspectRatio: fit === "contain" ? `${scene.width} / ${scene.height}` : undefined }}
     >
@@ -83,32 +111,40 @@ export function AgentOffice({ scene, fit = "contain", fps = 8, showNames = true,
         />
         {video && <BackgroundVideo key={video} src={video} poster={scene.background} />}
 
-        {scene.agents.map((agent) => (
+        {seated.map(({ seat, status }) => (
           <div
-            key={agent.id}
-            className="absolute"
+            key={seat.id}
+            className={cn("absolute", status === "offline" && "opacity-50 grayscale")}
             style={{
-              left: pct(agent.x, scene.width),
-              top: pct(agent.y, scene.height),
-              width: pct(agent.width, scene.width),
-              height: pct(agent.height, scene.height),
-              zIndex: agent.zIndex,
+              left: pct(seat.x, scene.width),
+              top: pct(seat.y, scene.height),
+              width: pct(seat.width, scene.width),
+              height: pct(seat.height, scene.height),
+              zIndex: seat.zIndex,
             }}
           >
-            <AgentSprite agent={agent} fps={fps} />
+            <AgentSprite agent={seat} fps={fps} animate={status === "working"} />
           </div>
         ))}
 
         {/* Name tags sit in their own layer so a nearer agent never covers another's tag */}
         {showNames &&
-          scene.agents.map((agent) => (
+          seated.map(({ seat, name, role, status }) => (
             <div
-              key={agent.id}
+              key={seat.id}
               className="absolute z-50 -translate-x-1/2 -translate-y-full pb-[0.6em] text-[clamp(9px,1.5cqw,13px)]"
-              style={{ left: pct(agent.x + agent.width * HEAD_X, scene.width), top: pct(agent.y, scene.height) }}
+              style={{ left: pct(seat.x + seat.width * HEAD_X, scene.width), top: pct(seat.y, scene.height) }}
             >
-              <div className="relative rounded-full bg-card/95 px-[0.8em] py-[0.35em] leading-none font-semibold whitespace-nowrap text-foreground shadow-lg ring-1 ring-border/70 backdrop-blur-sm">
-                {agent.name}
+              <div
+                className={cn(
+                  "relative flex items-center gap-[0.45em] rounded-full bg-card/95 px-[0.8em] py-[0.35em] leading-none font-semibold whitespace-nowrap text-foreground shadow-lg ring-1 ring-border/70 backdrop-blur-sm",
+                  status === "needs_approval" && "ring-2 ring-amber-500",
+                  status === "blocked" && "ring-2 ring-red-500"
+                )}
+              >
+                {team && <span aria-hidden className={cn("size-[0.55em] shrink-0 rounded-full", STATUS_DOT[status])} />}
+                {name}
+                {role && <span className="font-medium text-muted-foreground">{STATUS_TEXT[status] ?? role}</span>}
                 <span
                   aria-hidden
                   className="absolute top-full left-1/2 size-[0.6em] -translate-x-1/2 -translate-y-1/2 rotate-45 bg-card/95 ring-1 ring-border/70 [clip-path:polygon(100%_0,100%_100%,0_100%)]"
@@ -149,11 +185,16 @@ function BackgroundVideo({ src, poster }: { src: string; poster: string }) {
   );
 }
 
-function AgentSprite({ agent, fps }: { agent: OfficeAgent; fps: number }) {
+// animate: play the work loop. Otherwise the agent holds its first frame and breathes gently.
+function AgentSprite({ agent, fps, animate }: { agent: OfficeAgent; fps: number; animate: boolean }) {
   const [frame, setFrame] = useState(0);
   const { frames } = agent;
 
   useEffect(() => {
+    if (!animate) {
+      setFrame(0);
+      return;
+    }
     if (frames.length < 2 || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
 
     let timer: number | undefined;
@@ -181,10 +222,10 @@ function AgentSprite({ agent, fps }: { agent: OfficeAgent; fps: number }) {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [frames, fps]);
+  }, [frames, fps, animate]);
 
   return (
-    <>
+    <div className={cn("absolute inset-0 origin-bottom", !animate && "motion-safe:animate-[breathe_4s_ease-in-out_infinite]")}>
       {frames.map((src, i) => (
         <img
           key={src}
@@ -194,6 +235,6 @@ function AgentSprite({ agent, fps }: { agent: OfficeAgent; fps: number }) {
           className={cn("pointer-events-none absolute inset-0 size-full object-contain", i !== frame && "invisible")}
         />
       ))}
-    </>
+    </div>
   );
 }

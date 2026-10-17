@@ -9,10 +9,11 @@ import type { OfficeScene } from "@/lib/offices";
 import { createProject, type CreateProjectState } from "@/app/projects/actions";
 import { AgentOffice } from "@/components/office/agent-office";
 import { ProjectIcon } from "@/components/project/project-icon";
+import { RepoFields } from "@/components/project/repo-fields";
 import { PaletteToggle } from "@/components/theme/palette";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Field, FieldError, FieldLabel } from "@/components/ui/field";
+import { Field, FieldError, FieldLabel, FieldSeparator } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 
@@ -30,6 +31,8 @@ export function CreateProjectWizard({ offices, isFirst }: Props) {
   const [icon, setIcon] = useState<string>(PROJECT_ICONS[0].id);
   const [custom, setCustom] = useState<{ file: File; url: string } | null>(null);
   const [fileError, setFileError] = useState<string>();
+  const [repoPath, setRepoPath] = useState("");
+  const [devUrl, setDevUrl] = useState("");
   const [office, setOffice] = useState<string | null>(offices[0]?.id ?? null);
   const [state, formAction, pending] = useActionState<CreateProjectState, FormData>(createProject, {});
   const fileInput = useRef<HTMLInputElement>(null);
@@ -67,6 +70,8 @@ export function CreateProjectWizard({ offices, isFirst }: Props) {
     const fd = new FormData();
     fd.set("name", trimmedName);
     fd.set("office", office);
+    fd.set("repoPath", repoPath);
+    fd.set("devUrl", devUrl);
     if (iconFile) fd.set("iconFile", iconFile);
     else fd.set("icon", icon);
     startTransition(() => formAction(fd));
@@ -102,7 +107,7 @@ export function CreateProjectWizard({ offices, isFirst }: Props) {
             <form onSubmit={goNext} className="flex flex-col gap-6 p-6 sm:p-9">
               <Heading
                 title={isFirst ? "Create your first project" : "Create a new project"}
-                description="Give it a name and an icon. You can change these later."
+                description="Give it a name and an icon, and point it at the code your agents will work on. You can change these later."
               />
 
               <Field>
@@ -186,6 +191,9 @@ export function CreateProjectWizard({ offices, isFirst }: Props) {
                 <input ref={fileInput} type="file" accept={ICON_ACCEPT} className="sr-only" tabIndex={-1} onChange={onFileChange} />
                 {fileError && <FieldError>{fileError}</FieldError>}
               </Field>
+
+              <FieldSeparator className="[&>span]:bg-card">Code repository (optional)</FieldSeparator>
+              <RepoFields repoPath={repoPath} onRepoPathChange={setRepoPath} devUrl={devUrl} onDevUrlChange={setDevUrl} />
 
               <div className="flex items-center gap-3.5 rounded-2xl border bg-muted/40 p-4">
                 <ProjectIcon icon={icon} iconUrl={iconPreview} className="size-12 shadow-sm" />

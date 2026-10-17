@@ -13,9 +13,9 @@ export type NavItem = {
 export const NAV_ITEMS: NavItem[] = [
   { slug: "", label: "Office", description: "Watch your agents at work", Icon: Building2, ready: true },
   { slug: "overview", label: "Overview", description: "Your project at a glance", Icon: LayoutGrid, ready: false },
-  { slug: "agents", label: "Agents", description: "Brief your team and see what each agent is doing", Icon: Bot, ready: false },
+  { slug: "agents", label: "Agents", description: "Your team, what each agent may do and what it is doing", Icon: Bot, ready: true },
   { slug: "tasks", label: "Tasks", description: "Everything queued, running and done", Icon: ListChecks, ready: false },
-  { slug: "settings", label: "Settings", description: "Project and workspace preferences", Icon: Settings, ready: false },
+  { slug: "settings", label: "Settings", description: "Project name and code repository", Icon: Settings, ready: true },
 ];
 
 export function navHref(slug: string) {
