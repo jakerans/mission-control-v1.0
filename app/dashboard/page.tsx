@@ -12,7 +12,7 @@ export default async function OfficePage() {
   const project = await getActiveProject();
   if (!project) redirect("/projects/new");
   const [scene, team] = await Promise.all([getOfficeScene(project.officeId), ensureTeam(project.id)]);
-  const seated = team.flatMap((a) => (a.desk === null ? [] : [{ desk: a.desk, name: a.name, role: ROLE_LABELS[a.role], status: a.status }]));
+  const seated = team.flatMap((a) => (a.desk === null ? [] : [{ desk: a.desk, name: a.name, role: ROLE_LABELS[a.role], status: a.status, href: `/dashboard/agents/${a.id}` }]));
 
   return (
     <div className="h-[calc(100svh-6rem)] min-h-80 overflow-hidden rounded-3xl bg-card shadow-xl ring-1 ring-border/60">

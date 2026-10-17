@@ -2,12 +2,13 @@
 
 /* eslint-disable @next/next/no-img-element -- scene images are pre-sized sprites served from our own API */
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import type { AgentStatus } from "@/db/schema";
 import type { OfficeAgent, OfficeScene } from "@/lib/offices";
 import { cn } from "@/lib/utils";
 
 // A project's agent, placed at the office seat matching its desk number
-export type OfficeTeamMember = { desk: number; name: string; role: string; status: AgentStatus };
+export type OfficeTeamMember = { desk: number; name: string; role: string; status: AgentStatus; href?: string };
 
 type Props = {
   scene: OfficeScene;
@@ -26,7 +27,7 @@ type Props = {
   className?: string;
 };
 
-type Seated = { seat: OfficeAgent; name: string; role?: string; status: AgentStatus };
+type Seated = { seat: OfficeAgent; name: string; role?: string; status: AgentStatus; href?: string };
 
 const STATUS_DOT: Record<AgentStatus, string> = {
   idle: "bg-muted-foreground/50",
@@ -54,7 +55,7 @@ export function AgentOffice({ scene, fit = "contain", fps = 8, showNames = true,
   const seated: Seated[] = team
     ? scene.agents.flatMap((seat, desk) => {
         const member = team.find((m) => m.desk === desk);
-        return member ? [{ seat, name: member.name, role: member.role, status: member.status }] : [];
+        return member ? [{ seat, name: member.name, role: member.role, status: member.status, href: member.href }] : [];
       })
     : scene.agents.map((seat) => ({ seat, name: seat.name, status: "working" as const }));
   const backgroundRef = useRef<HTMLImageElement>(null);
@@ -129,13 +130,14 @@ export function AgentOffice({ scene, fit = "contain", fps = 8, showNames = true,
 
         {/* Name tags sit in their own layer so a nearer agent never covers another's tag */}
         {showNames &&
-          seated.map(({ seat, name, role, status }) => (
+          seated.map(({ seat, name, role, status, href }) => (
             <div
               key={seat.id}
               className="absolute z-50 -translate-x-1/2 -translate-y-full pb-[0.6em] text-[clamp(9px,1.5cqw,13px)]"
               style={{ left: pct(seat.x + seat.width * HEAD_X, scene.width), top: pct(seat.y, scene.height) }}
             >
-              <div
+              <TagElement
+                href={href}
                 className={cn(
                   "relative flex items-center gap-[0.45em] rounded-full bg-card/95 px-[0.8em] py-[0.35em] leading-none font-semibold whitespace-nowrap text-foreground shadow-lg ring-1 ring-border/70 backdrop-blur-sm",
                   status === "needs_approval" && "ring-2 ring-amber-500",
@@ -149,11 +151,21 @@ export function AgentOffice({ scene, fit = "contain", fps = 8, showNames = true,
                   aria-hidden
                   className="absolute top-full left-1/2 size-[0.6em] -translate-x-1/2 -translate-y-1/2 rotate-45 bg-card/95 ring-1 ring-border/70 [clip-path:polygon(100%_0,100%_100%,0_100%)]"
                 />
-              </div>
+              </TagElement>
             </div>
           ))}
       </div>
     </div>
+  );
+}
+
+// A name tag links to the agent's page when it has one
+function TagElement({ href, className, children }: { href?: string; className: string; children: React.ReactNode }) {
+  if (!href) return <div className={className}>{children}</div>;
+  return (
+    <Link href={href} className={cn(className, "transition-transform hover:-translate-y-0.5 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none")}>
+      {children}
+    </Link>
   );
 }
 

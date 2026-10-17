@@ -7,6 +7,7 @@ import { switchProject } from "@/app/projects/actions";
 import { NAV_ITEMS, getActiveNav, navHref, type NavItem } from "@/lib/dashboard-nav";
 import { cn } from "@/lib/utils";
 import { LofiPlayer } from "@/components/music/lofi-player";
+import { PlanUsageMeter } from "@/components/dashboard/plan-usage-meter";
 import { ProjectIcon } from "@/components/project/project-icon";
 import { Kbd } from "@/components/ui/kbd";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -57,7 +58,8 @@ export function AppSidebar({ projects, activeProjectId, pathname, expanded, onTo
         </ul>
       </nav>
 
-      <div className="mt-3">
+      <div className="mt-3 flex flex-col gap-2">
+        <PlanUsageMeter expanded={expanded} />
         <LofiPlayer expanded={expanded} />
       </div>
 

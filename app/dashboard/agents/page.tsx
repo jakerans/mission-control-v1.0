@@ -1,8 +1,10 @@
 /* eslint-disable @next/next/no-img-element -- avatars are sprite frames served from our own API */
 import type { Metadata } from "next";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Armchair, ChevronDown, Cpu, ShieldCheck } from "lucide-react";
 import type { AgentStatus } from "@/db/schema";
+import { modelLabel } from "@/lib/agent-models";
 import { ensureTeam, ROLE_LABELS, STATUS_LABELS } from "@/lib/agents";
 import { getOfficeScene } from "@/lib/offices";
 import { getActiveProject } from "@/lib/projects";
@@ -35,7 +37,7 @@ export default async function AgentsPage() {
       {team.map((agent) => {
         const seat = agent.desk !== null ? scene?.agents[agent.desk] : undefined;
         return (
-          <article key={agent.id} className="flex flex-col rounded-3xl bg-card p-5 shadow-sm ring-1 ring-border/60">
+          <article key={agent.id} className="relative flex flex-col rounded-3xl bg-card p-5 shadow-sm ring-1 ring-border/60 transition-shadow has-[a:hover]:shadow-lg">
             <div className="flex items-start gap-3.5">
               <div className="flex size-16 shrink-0 items-end justify-center overflow-hidden rounded-2xl bg-accent/60">
                 {seat ? (
@@ -45,7 +47,12 @@ export default async function AgentsPage() {
                 )}
               </div>
               <div className="min-w-0 flex-1">
-                <h2 className="truncate text-lg font-bold tracking-tight">{agent.name}</h2>
+                <h2 className="truncate text-lg font-bold tracking-tight">
+                  {/* The whole card opens the agent; the instructions toggle sits above the link */}
+                  <Link href={`/dashboard/agents/${agent.id}`} className="after:absolute after:inset-0 after:rounded-3xl">
+                    {agent.name}
+                  </Link>
+                </h2>
                 <p className="text-sm font-medium text-muted-foreground">{ROLE_LABELS[agent.role]}</p>
                 <span className={cn("mt-1.5 inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-semibold", STATUS_STYLE[agent.status])}>
                   <span className={cn("size-1.5 rounded-full bg-current", agent.status === "working" && "animate-pulse")} />
@@ -61,8 +68,7 @@ export default async function AgentsPage() {
                 <Cpu className="size-3.5" />
                 <dt className="sr-only">Engine</dt>
                 <dd>
-                  {ENGINE_LABELS[agent.engine]}
-                  {agent.model ? ` · ${agent.model}` : " · default model"}
+                  {ENGINE_LABELS[agent.engine]} · {modelLabel(agent.model)}
                 </dd>
               </div>
               <div className="flex items-center gap-2">
@@ -81,7 +87,7 @@ export default async function AgentsPage() {
               ))}
             </div>
 
-            <details className="group mt-auto pt-4">
+            <details className="group relative z-10 mt-auto pt-4">
               <summary className="flex cursor-pointer list-none items-center gap-1 text-xs font-semibold text-primary [&::-webkit-details-marker]:hidden">
                 Instructions
                 <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" />

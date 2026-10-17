@@ -1,14 +1,17 @@
 import { asc, eq } from "drizzle-orm";
 import { agents, db, type Agent, type AgentRole, type AgentStatus } from "@/db";
 
-type TeamMember = Pick<Agent, "name" | "role" | "description" | "instructions" | "permissions">;
+type TeamMember = Pick<Agent, "name" | "role" | "description" | "instructions" | "permissions" | "model">;
 
 // Every software project starts with this team: a lead who plans and coordinates, and three workers
 // for the plan → build → test → review loop. None of them can merge or deploy; those stay with the
-// user's approval. Names and instructions are editable per project.
+// user's approval. Names, instructions and models are editable per project.
+// Models: Opus where judgement matters and token use is small (planning, review), Sonnet for the
+// token-heavy implementation and testing work.
 export const DEFAULT_TEAM: TeamMember[] = [
   {
     name: "Juno",
+    model: "claude-opus-5-5",
     role: "lead",
     description: "Lead engineer. Investigates requests, writes the plan, splits it into tasks and assembles the final pull request.",
     instructions: [
@@ -22,6 +25,7 @@ export const DEFAULT_TEAM: TeamMember[] = [
   },
   {
     name: "Milo",
+    model: "claude-sonnet-5-5",
     role: "developer",
     description: "Developer. Implements approved tasks on their own branch in an isolated worktree.",
     instructions: [
@@ -33,6 +37,7 @@ export const DEFAULT_TEAM: TeamMember[] = [
   },
   {
     name: "Ivy",
+    model: "claude-sonnet-5-5",
     role: "tester",
     description: "Tester. Writes and runs tests against the developer's branch and reports what passes and fails.",
     instructions: [
@@ -43,6 +48,7 @@ export const DEFAULT_TEAM: TeamMember[] = [
   },
   {
     name: "Rex",
+    model: "claude-opus-5-5",
     role: "reviewer",
     description: "Reviewer. Independently reviews the combined diff for bugs, security and unintended side effects.",
     instructions: [
