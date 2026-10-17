@@ -32,6 +32,8 @@ export const projects = pgTable("projects", {
   defaultBranch: text("default_branch").notNull().default("main"),
   // Where merged work can be checked (e.g. the site main auto-deploys to)
   devUrl: text("dev_url"),
+  // Commands that make a fresh worktree ready to build and test (run in order, in cmd.exe)
+  setupCommands: jsonb("setup_commands").$type<string[]>().notNull().default([]),
   createdAt: createdAt(),
 });
 
@@ -96,9 +98,10 @@ export const tasks = pgTable(
     status: text("status", { enum: TASK_STATUSES }).notNull().default("queued"),
     assignedAgentId: integer("assigned_agent_id").references(() => agents.id, { onDelete: "set null" }),
     spec: jsonb("spec").$type<TaskSpec>().notNull().default({}),
-    // Commit the work starts from, and the branch it lands on
+    // Commit the work starts from, the branch it lands on, and the worktree it's done in
     baseRevision: text("base_revision"),
     branch: text("branch"),
+    worktreePath: text("worktree_path"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -191,7 +194,7 @@ export const artifacts = pgTable(
   (t) => [index("artifacts_task_idx").on(t.taskId)]
 );
 
-export const APPROVAL_KINDS = ["plan", "migration", "merge", "deploy", "message", "data_change", "other"] as const;
+export const APPROVAL_KINDS = ["plan", "pull_request", "migration", "merge", "deploy", "message", "data_change", "other"] as const;
 export const APPROVAL_STATUSES = ["pending", "approved", "rejected"] as const;
 
 // A consequential step waiting on the user. Work that needs it stays blocked until it's decided.

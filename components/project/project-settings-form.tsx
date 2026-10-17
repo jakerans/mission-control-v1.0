@@ -6,13 +6,14 @@ import { updateProjectSettings, type ProjectSettingsState } from "@/app/projects
 import { RepoFields } from "@/components/project/repo-fields";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Field, FieldLabel } from "@/components/ui/field";
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { Textarea } from "@/components/ui/textarea";
 
-type Props = { projectId: number; name: string; repoPath: string | null; devUrl: string | null };
+type Props = { projectId: number; name: string; repoPath: string | null; devUrl: string | null; setupCommands: string[] };
 
-export function ProjectSettingsForm({ projectId, name: initialName, repoPath: initialRepoPath, devUrl: initialDevUrl }: Props) {
+export function ProjectSettingsForm({ projectId, name: initialName, repoPath: initialRepoPath, devUrl: initialDevUrl, setupCommands }: Props) {
   const [name, setName] = useState(initialName);
   const [repoPath, setRepoPath] = useState(initialRepoPath ?? "");
   const [devUrl, setDevUrl] = useState(initialDevUrl ?? "");
@@ -28,6 +29,23 @@ export function ProjectSettingsForm({ projectId, name: initialName, repoPath: in
       </Field>
 
       <RepoFields repoPath={repoPath} onRepoPathChange={setRepoPath} devUrl={devUrl} onDevUrlChange={setDevUrl} />
+
+      <Field>
+        <FieldLabel htmlFor="setup-commands" className="font-semibold">
+          Workspace setup commands
+        </FieldLabel>
+        <Textarea
+          id="setup-commands"
+          name="setupCommands"
+          defaultValue={setupCommands.join("\n")}
+          placeholder={"composer install --no-interaction\nnpm ci\nnpm run build"}
+          spellCheck={false}
+          className="min-h-28 rounded-xl px-4 font-mono text-xs"
+        />
+        <FieldDescription>
+          Run in order (in the Windows command prompt) to get each task&apos;s fresh copy of the repo ready to build and test. One per line; they may run again if setup is retried.
+        </FieldDescription>
+      </Field>
 
       {state.error && (
         <Alert variant="destructive">

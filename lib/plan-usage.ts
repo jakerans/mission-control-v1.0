@@ -24,7 +24,16 @@ export async function getPlanUsage() {
 
 async function saveWindows(windows: Record<string, UsageWindow>, subscriptionType?: string | null) {
   const [existing] = await db.select().from(planUsage).where(eq(planUsage.id, ROW_ID));
-  const merged = { ...(existing?.windows ?? {}), ...windows };
+  // Merge field by field: a rate-limit event without a percentage mustn't wipe the last known one
+  const merged = { ...(existing?.windows ?? {}) };
+  for (const [name, window] of Object.entries(windows)) {
+    const previous = merged[name];
+    merged[name] = {
+      utilization: window.utilization ?? previous?.utilization ?? null,
+      resetsAt: window.resetsAt ?? previous?.resetsAt ?? null,
+      status: window.status ?? previous?.status,
+    };
+  }
   const values = { windows: merged, subscriptionType: subscriptionType ?? existing?.subscriptionType ?? null, updatedAt: new Date() };
   await db
     .insert(planUsage)

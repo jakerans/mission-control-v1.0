@@ -1,13 +1,13 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { createSdkMcpServer, query, tool, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { and, desc, eq, gt, isNotNull } from "drizzle-orm";
 import { z } from "zod";
-import { agents, approvals, artifacts, db, events, projects, runs, taskDependencies, tasks, type Agent, type Project } from "@/db";
+import { agents, approvals, artifacts, db, events, projects, runs, tasks, type Agent, type Project } from "@/db";
 import { listAgents, ROLE_LABELS } from "@/lib/agents";
-import { agentAuth, authReady } from "@/lib/agent-auth";
+import { authReady } from "@/lib/agent-auth";
 import { DEFAULT_MODEL, EFFORT_LEVELS, LEAD_SELECTABLE_MODELS, modelLabel } from "@/lib/agent-models";
-import { recordRateLimit, refreshPlanUsage } from "@/lib/plan-usage";
+import { isAgentRunning, logEvent, settleOrphanedRuns, startSession, stopAgentRun } from "@/lib/orchestrator/session";
 
 // The lead agent: a read-only Claude Agent SDK session in the project's repository. You chat with it
 // in Mission Control; when a request needs work, it investigates and submits a plan through the
@@ -16,43 +16,12 @@ import { recordRateLimit, refreshPlanUsage } from "@/lib/plan-usage";
 const exec = promisify(execFile);
 
 const MAX_TURNS = 80;
-const MCP_SERVER = "mission-control";
 
 // Read-only git commands the lead may run without asking
 const GIT_READ_COMMANDS = ["log", "show", "diff", "status", "ls-files", "blame", "branch", "rev-parse"];
-const ALLOWED_TOOLS = [
-  "Read",
-  "Glob",
-  "Grep",
-  ...GIT_READ_COMMANDS.map((cmd) => `Bash(git ${cmd} *)`),
-  `mcp__${MCP_SERVER}__propose_plan`,
-];
+const ALLOWED_TOOLS = ["Read", "Glob", "Grep", ...GIT_READ_COMMANDS.map((cmd) => `Bash(git ${cmd} *)`)];
 
-// Runs in progress in this server process, so they can be stopped, and so a run left "running" by a
-// restart can be recognised as interrupted.
-type ActiveRun = { runId: number; abort: AbortController };
-const globalForRuns = globalThis as unknown as { activeLeadRuns?: Map<number, ActiveRun> };
-const active = (globalForRuns.activeLeadRuns ??= new Map<number, ActiveRun>());
-
-export function isLeadRunning(agentId: number) {
-  return active.has(agentId);
-}
-
-async function logEvent(values: typeof events.$inferInsert) {
-  await db.insert(events).values(values);
-}
-
-// Marks runs the database thinks are running, but which this process isn't running, as interrupted
-// (the server restarted mid-run).
-async function settleOrphanedRuns(agentId: number) {
-  if (active.has(agentId)) return;
-  const orphaned = await db
-    .update(runs)
-    .set({ status: "failed", error: "Interrupted: Mission Control restarted during this run.", endedAt: new Date() })
-    .where(and(eq(runs.agentId, agentId), eq(runs.status, "running")))
-    .returning({ id: runs.id });
-  if (orphaned.length) await refreshLeadStatus(agentId);
-}
+export const isLeadRunning = isAgentRunning;
 
 // Idle, or waiting on you while a plan it requested is undecided.
 export async function refreshLeadStatus(agentId: number) {
@@ -61,7 +30,7 @@ export async function refreshLeadStatus(agentId: number) {
     .from(approvals)
     .where(and(eq(approvals.requestedByAgentId, agentId), eq(approvals.status, "pending")))
     .limit(1);
-  const status = active.has(agentId) ? "working" : pending ? "needs_approval" : "idle";
+  const status = isAgentRunning(agentId) ? "working" : pending ? "needs_approval" : "idle";
   await db.update(agents).set({ status }).where(eq(agents.id, agentId));
 }
 
@@ -79,32 +48,60 @@ export async function sendToLead(agentId: number, text: string): Promise<{ error
   // sign-in method to be chosen explicitly
   if (!authReady()) return { error: "Add your Anthropic API key to mission-control/.env as ANTHROPIC_API_KEY, then restart the app." };
 
-  await settleOrphanedRuns(agentId);
-  if (active.has(agentId)) return { error: `${agent.name} is still working on your last message.` };
+  if ((await settleOrphanedRuns([agentId])).length) await refreshLeadStatus(agentId);
+  if (isAgentRunning(agentId)) return { error: `${agent.name} is still working on your last message.` };
+
+  const [baseRevision, team, resume] = await Promise.all([headRevision(project.repoPath), listAgents(project.id), currentSession(agentId)]);
 
   await logEvent({ projectId: project.id, agentId, type: "message.user", message });
-  const [run] = await db.insert(runs).values({ projectId: project.id, agentId, engine: "claude", status: "running" }).returning();
-  const abort = new AbortController();
-  active.set(agentId, { runId: run.id, abort });
-  await db.update(agents).set({ status: "working" }).where(eq(agents.id, agentId));
+  const started = await startSession({
+    agent,
+    projectId: project.id,
+    cwd: project.repoPath,
+    prompt: message,
+    resume,
+    model: agent.model ?? DEFAULT_MODEL,
+    effort: "high",
+    maxTurns: MAX_TURNS,
+    tools: ["Read", "Glob", "Grep", "Bash"],
+    allowedTools: ALLOWED_TOOLS,
+    mcpTools: (runId) => [proposePlanTool({ agent, project, runId, baseRevision, team })],
+    systemPromptAppend: leadPrompt(agent, project, team, baseRevision),
+  });
+  if ("error" in started) return { error: started.error };
 
   // Deliberately not awaited: the run outlives this request.
-  void executeRun(agent, project, run.id, message, abort).catch((error) => console.error(`[lead] run ${run.id} crashed`, error));
+  void started.done.then(() => refreshLeadStatus(agentId)).catch((error) => console.error("[lead] status refresh failed", error));
   return {};
+}
+
+// The lead's conversation continues its latest session since you last started a new one
+async function currentSession(agentId: number) {
+  const [reset] = await db
+    .select({ at: events.createdAt })
+    .from(events)
+    .where(and(eq(events.agentId, agentId), eq(events.type, "conversation.new")))
+    .orderBy(desc(events.id))
+    .limit(1);
+  const [previous] = await db
+    .select({ sessionId: runs.sessionId })
+    .from(runs)
+    .where(and(eq(runs.agentId, agentId), isNotNull(runs.sessionId), reset ? gt(runs.startedAt, reset.at) : undefined))
+    .orderBy(desc(runs.startedAt))
+    .limit(1);
+  return previous?.sessionId ?? undefined;
 }
 
 // The next message starts a fresh session (the old one stays in the history above it)
 export async function newConversation(agentId: number): Promise<{ error?: string }> {
-  if (active.has(agentId)) return { error: "Wait for the current reply to finish, or stop it first." };
+  if (isAgentRunning(agentId)) return { error: "Wait for the current reply to finish, or stop it first." };
   const [agent] = await db.select({ projectId: agents.projectId }).from(agents).where(eq(agents.id, agentId));
   if (!agent) return { error: "Agent not found." };
   await logEvent({ projectId: agent.projectId, agentId, type: "conversation.new" });
   return {};
 }
 
-export async function stopLead(agentId: number) {
-  active.get(agentId)?.abort.abort();
-}
+export const stopLead = stopAgentRun;
 
 async function headRevision(repoPath: string) {
   try {
@@ -113,156 +110,6 @@ async function headRevision(repoPath: string) {
   } catch {
     return null;
   }
-}
-
-async function executeRun(agent: Agent, project: Project, runId: number, message: string, abort: AbortController) {
-  const base = { projectId: project.id, agentId: agent.id, runId };
-  try {
-    const baseRevision = await headRevision(project.repoPath!);
-    const team = await listAgents(project.id);
-
-    // Continue the lead's conversation: its latest session since you last started a new one
-    const [reset] = await db
-      .select({ at: events.createdAt })
-      .from(events)
-      .where(and(eq(events.agentId, agent.id), eq(events.type, "conversation.new")))
-      .orderBy(desc(events.id))
-      .limit(1);
-    const [previous] = await db
-      .select({ sessionId: runs.sessionId })
-      .from(runs)
-      .where(and(eq(runs.agentId, agent.id), isNotNull(runs.sessionId), reset ? gt(runs.startedAt, reset.at) : undefined))
-      .orderBy(desc(runs.startedAt))
-      .limit(1);
-
-    const missionControl = createSdkMcpServer({
-      name: MCP_SERVER,
-      version: "1.0.0",
-      tools: [proposePlanTool({ agent, project, runId, baseRevision, team })],
-    });
-
-    const conversation = query({
-      prompt: message,
-      options: {
-        cwd: project.repoPath!,
-        model: agent.model ?? DEFAULT_MODEL,
-        effort: "high",
-        resume: previous?.sessionId ?? undefined,
-        abortController: abort,
-        maxTurns: MAX_TURNS,
-        // Don't load the repository's or this PC's Claude Code settings (hooks, MCP servers,
-        // permissions); the lead reads the repo's CLAUDE.md itself.
-        settingSources: [],
-        tools: ["Read", "Glob", "Grep", "Bash"],
-        allowedTools: ALLOWED_TOOLS,
-        // Anything not pre-approved above is denied rather than prompting
-        permissionMode: "dontAsk",
-        mcpServers: { [MCP_SERVER]: missionControl },
-        // Only Mission Control's own tool: no .mcp.json, user or plugin servers, and none of your
-        // claude.ai connectors (their tool definitions alone were ~400k tokens per request)
-        strictMcpConfig: true,
-        settings: { disableClaudeAiConnectors: true },
-        // On the Claude login, hide any API key so the session can't bill it by accident
-        env: agentAuth() === "claude_login" ? { ...process.env, ANTHROPIC_API_KEY: undefined } : undefined,
-        systemPrompt: { type: "preset", preset: "claude_code", append: leadPrompt(agent, project, team, baseRevision) },
-      },
-    });
-
-    let finished = false;
-    for await (const msg of conversation) {
-      finished = (await recordMessage(msg, base)) || finished;
-    }
-    if (!finished) throw new Error("The session ended without a result.");
-  } catch (error) {
-    const aborted = abort.signal.aborted;
-    const detail = aborted ? "Stopped by you." : error instanceof Error ? error.message : String(error);
-    await db
-      .update(runs)
-      .set({ status: aborted ? "cancelled" : "failed", error: detail, endedAt: new Date() })
-      .where(eq(runs.id, runId));
-    await logEvent({ ...base, type: aborted ? "run.cancelled" : "run.failed", message: detail });
-  } finally {
-    active.delete(agent.id);
-    await refreshLeadStatus(agent.id);
-    void refreshPlanUsage();
-  }
-}
-
-// One-line description of a tool call for the activity feed
-function describeToolCall(name: string, input: Record<string, unknown>) {
-  const str = (key: string) => (typeof input[key] === "string" ? (input[key] as string) : "");
-  switch (name) {
-    case "Read":
-      return `Read ${str("file_path")}`;
-    case "Glob":
-      return `Looked for ${str("pattern")}`;
-    case "Grep":
-      return `Searched for "${str("pattern")}"${str("path") ? ` in ${str("path")}` : ""}`;
-    case "Bash":
-      return `Ran ${str("command")}`;
-    case `mcp__${MCP_SERVER}__propose_plan`:
-      return `Submitted a plan: ${str("title")}`;
-    default:
-      return `Used ${name}`;
-  }
-}
-
-// Records one SDK message. Returns true once the run's result has been recorded.
-async function recordMessage(msg: SDKMessage, base: { projectId: number; agentId: number; runId: number }) {
-  if (msg.type === "system" && msg.subtype === "init") {
-    await db.update(runs).set({ sessionId: msg.session_id, model: msg.model }).where(eq(runs.id, base.runId));
-    return false;
-  }
-
-  if (msg.type === "assistant" && msg.parent_tool_use_id === null) {
-    for (const block of msg.message.content) {
-      if (block.type === "text" && block.text.trim()) {
-        await logEvent({ ...base, type: "message.agent", message: block.text.trim() });
-      } else if (block.type === "tool_use") {
-        const input = (block.input ?? {}) as Record<string, unknown>;
-        await logEvent({ ...base, type: "tool.called", message: describeToolCall(block.name, input), data: { tool: block.name } });
-      }
-    }
-    return false;
-  }
-
-  if (msg.type === "rate_limit_event") {
-    await recordRateLimit(msg.rate_limit_info).catch(() => undefined);
-    return false;
-  }
-
-  if (msg.type === "result") {
-    const ok = msg.subtype === "success" && !msg.is_error;
-    const error = ok ? null : msg.subtype === "success" ? msg.result : msg.errors.join("\n") || msg.subtype;
-    await db
-      .update(runs)
-      .set({
-        status: ok ? "succeeded" : "failed",
-        sessionId: msg.session_id,
-        inputTokens: msg.usage.input_tokens + (msg.usage.cache_read_input_tokens ?? 0) + (msg.usage.cache_creation_input_tokens ?? 0),
-        outputTokens: msg.usage.output_tokens,
-        costUsd: msg.total_cost_usd.toFixed(4),
-        error,
-        endedAt: new Date(),
-      })
-      .where(eq(runs.id, base.runId));
-    const [{ model }] = await db.select({ model: runs.model }).from(runs).where(eq(runs.id, base.runId));
-    await logEvent({
-      ...base,
-      type: ok ? "run.finished" : "run.failed",
-      message: ok ? "" : (error ?? "The run failed."),
-      data: {
-        costUsd: msg.total_cost_usd,
-        turns: msg.num_turns,
-        tokens: msg.usage.input_tokens + (msg.usage.cache_read_input_tokens ?? 0) + (msg.usage.cache_creation_input_tokens ?? 0) + msg.usage.output_tokens,
-        auth: agentAuth(),
-        model,
-      },
-    });
-    return true;
-  }
-
-  return false;
 }
 
 function leadPrompt(agent: Agent, project: Project, team: Agent[], baseRevision: string | null) {
@@ -288,6 +135,7 @@ ${workers.map((w) => `- ${w.name} (${w.role}, runs on ${modelLabel(w.model)}): $
 - At the start of a conversation, read the repository's own agent and project docs (CLAUDE.md, AGENTS.md, README) before answering questions about the code, and follow its conventions in your plans.
 - Answer questions directly. Not every message needs a plan.
 - When the owner asks for a change (a feature, a fix, a refactor), investigate until you know which files are involved and how the change will be verified, then call the propose_plan tool once. Ask a clarifying question first if the request is ambiguous in a way that changes the plan.
+- After approval, the subtasks run one at a time in the order you list them, on one new branch in a separate copy of the repository, so later subtasks build on earlier ones. A typical order is developer, then tester, then reviewer. Each agent reads its subtask and your plan, not this conversation, so make objectives self-contained.
 - Each subtask runs on its assignee's model at high effort unless you set model or effort on it. Override only with a reason: a lighter model or low effort for mechanical work (renames, boilerplate), a stronger model or higher effort for unusually hard or risky work. The owner sees and approves these choices with the plan; their plan limits are shared, so don't over-provision.
 - After propose_plan returns, reply with a two or three sentence summary and stop. The owner approves or rejects the plan in Mission Control; if they reject it, they'll tell you why and you revise.
 - Never merge, deploy, run migrations against shared databases, or touch production. Those stay with the owner.
@@ -301,7 +149,6 @@ const subtaskSchema = z.object({
   allowed_paths: z.array(z.string()).optional().describe("Files or folders this subtask may change"),
   completion_criteria: z.array(z.string()).optional(),
   verification_commands: z.array(z.string()).optional().describe("Commands that prove the subtask is done, e.g. the relevant test filter"),
-  depends_on: z.array(z.number().int()).optional().describe("Indexes (0-based) of subtasks in this list that must finish first"),
   model: z
     .enum(LEAD_SELECTABLE_MODELS)
     .optional()
@@ -332,7 +179,7 @@ function proposePlanTool({
       type: z.enum(["code_change", "investigation"]).describe("code_change for work that changes the repository; investigation for research that only produces findings"),
       objective: z.string().describe("One or two sentences: what the owner asked for and the outcome"),
       plan: z.string().describe("The plan in Markdown: approach, affected files, risks and open questions, and how it will be verified"),
-      subtasks: z.array(subtaskSchema).min(1).describe("The work, split into bounded subtasks for the team, in order"),
+      subtasks: z.array(subtaskSchema).min(1).describe("The work, split into bounded subtasks for the team, in the order they should run"),
     },
     async (input) => {
       const byRole = (role: string) => team.find((member) => member.role === role)?.id ?? null;
@@ -351,9 +198,8 @@ function proposePlanTool({
           })
           .returning();
 
-        const subtaskIds: number[] = [];
         for (const sub of input.subtasks) {
-          const [row] = await tx
+          await tx
             .insert(tasks)
             .values({
               projectId: project.id,
@@ -371,16 +217,8 @@ function proposePlanTool({
                 model: sub.model,
                 effort: sub.effort,
               },
-            })
-            .returning({ id: tasks.id });
-          subtaskIds.push(row.id);
+            });
         }
-
-        // Dependencies between subtasks, by their index in the list
-        const dependencies = input.subtasks.flatMap((sub, i) =>
-          (sub.depends_on ?? []).filter((d) => d >= 0 && d < subtaskIds.length && d !== i).map((d) => ({ taskId: subtaskIds[i], dependsOnId: subtaskIds[d] }))
-        );
-        if (dependencies.length) await tx.insert(taskDependencies).values(dependencies).onConflictDoNothing();
 
         await tx.insert(artifacts).values({ projectId: project.id, taskId: task.id, runId, type: "plan", title: input.title, content: input.plan });
         const [approval] = await tx

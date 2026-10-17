@@ -2,6 +2,7 @@
 
 /* eslint-disable @next/next/no-img-element -- avatars are sprite frames served from our own API */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, ArrowUp, Check, ChevronDown, CircleSlash, ClipboardList, FileSearch, KeyRound, MessageSquarePlus, Square, X } from "lucide-react";
 import { decidePlan, sendMessage, startNewConversation, stopAgent } from "@/app/agents/actions";
@@ -296,18 +297,39 @@ function NoteRow({ event }: { event: FeedEvent }) {
     const text = [model, usage].filter(Boolean).join(" · ");
     return text ? <p className="ml-11 text-[11px] text-muted-foreground/70">{text}</p> : null;
   }
-  const styles: Record<string, { Icon: typeof Check; text: string; className: string }> = {
+  const pr = event.data?.kind === "pull_request";
+  const styles: Record<string, { Icon: typeof Check; text: string; className: string; tasksLink?: boolean }> = {
     "run.failed": { Icon: AlertTriangle, text: event.message || "The run failed.", className: "text-destructive" },
     "run.cancelled": { Icon: CircleSlash, text: "Stopped.", className: "text-muted-foreground" },
-    "approval.approved": { Icon: Check, text: "You approved the plan.", className: "text-emerald-700 dark:text-emerald-400" },
-    "approval.rejected": { Icon: X, text: `You rejected the plan${event.message ? `: ${event.message}` : "."}`, className: "text-muted-foreground" },
+    "approval.approved": {
+      Icon: Check,
+      text: pr ? "You pushed the branch for a pull request." : "You approved the plan. The team is on it.",
+      className: "text-emerald-700 dark:text-emerald-400",
+      tasksLink: !pr,
+    },
+    "approval.rejected": {
+      Icon: X,
+      text: pr ? "You discarded the finished work." : `You rejected the plan${event.message ? `: ${event.message}` : "."}`,
+      className: "text-muted-foreground",
+    },
+    "task.ready": { Icon: ClipboardList, text: `"${event.message}" is done and waiting for your review.`, className: "text-amber-700 dark:text-amber-400", tasksLink: true },
   };
   const style = styles[event.type];
   if (!style) return null;
   return (
     <p className={cn("ml-11 flex items-start gap-1.5 text-xs", style.className)}>
       <style.Icon className="mt-0.5 size-3.5 shrink-0" />
-      <span className="whitespace-pre-wrap">{style.text}</span>
+      <span className="whitespace-pre-wrap">
+        {style.text}
+        {style.tasksLink && (
+          <>
+            {" "}
+            <Link href="/dashboard/tasks" className="font-semibold underline underline-offset-2">
+              Open Tasks
+            </Link>
+          </>
+        )}
+      </span>
     </p>
   );
 }

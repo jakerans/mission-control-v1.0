@@ -87,9 +87,16 @@ export async function updateProjectSettings(projectId: number, _prev: ProjectSet
   const repo = await readRepoFields(formData);
   if ("error" in repo) return { error: repo.error };
 
+  // One command per line; blank lines dropped
+  const setupCommands = String(formData.get("setupCommands") ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 30);
+
   await db
     .update(projects)
-    .set({ name, ...repo.values })
+    .set({ name, ...repo.values, setupCommands })
     .where(eq(projects.id, projectId));
   revalidatePath("/dashboard", "layout");
   return { saved: true };

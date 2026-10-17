@@ -1,10 +1,13 @@
 "use server";
 
-import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { agents, approvals, db, events, tasks } from "@/db";
+import { eq } from "drizzle-orm";
+import { agents, db } from "@/db";
 import { MODEL_CHOICES } from "@/lib/agent-models";
-import { newConversation, refreshLeadStatus, sendToLead, stopLead } from "@/lib/orchestrator/lead";
+import { decideApproval } from "@/lib/orchestrator/approvals";
+import { cancelTask as cancelTaskRun, retrySubtask as retrySubtaskRun, retryWorkspace as retryWorkspaceRun } from "@/lib/orchestrator/dispatcher";
+import { newConversation, sendToLead, stopLead } from "@/lib/orchestrator/lead";
+import { stopAgentRun } from "@/lib/orchestrator/session";
 
 export async function sendMessage(agentId: number, text: string) {
   return sendToLead(agentId, text);
@@ -15,45 +18,18 @@ export async function startNewConversation(agentId: number) {
 }
 
 export async function stopAgent(agentId: number) {
-  await stopLead(agentId);
+  stopLead(agentId);
 }
 
-const MAX_NOTE = 2000;
+// Approve or reject something an agent asked for (a plan, or pushing a finished task's branch)
+export async function decide(approvalId: number, decision: "approved" | "rejected", note: string) {
+  const result = await decideApproval(approvalId, decision, note);
+  revalidatePath("/dashboard", "layout");
+  return result;
+}
 
-// Approve or reject a plan the lead submitted. Approving queues the task for the team; rejecting
-// cancels it and, if you said why, passes your note to the lead so it can revise.
-export async function decidePlan(approvalId: number, decision: "approved" | "rejected", note: string): Promise<{ error?: string }> {
-  const decisionNote = note.trim().slice(0, MAX_NOTE) || null;
-
-  const [approval] = await db
-    .update(approvals)
-    .set({ status: decision, decisionNote, decidedAt: new Date() })
-    .where(and(eq(approvals.id, approvalId), eq(approvals.status, "pending")))
-    .returning();
-  if (!approval) return { error: "This plan was already decided." };
-
-  if (approval.taskId) {
-    const status = decision === "approved" ? "queued" : "cancelled";
-    await db.update(tasks).set({ status }).where(eq(tasks.id, approval.taskId));
-    if (decision === "rejected") await db.update(tasks).set({ status: "cancelled" }).where(eq(tasks.parentId, approval.taskId));
-  }
-
-  await db.insert(events).values({
-    projectId: approval.projectId,
-    taskId: approval.taskId,
-    agentId: approval.requestedByAgentId,
-    type: decision === "approved" ? "approval.approved" : "approval.rejected",
-    message: decisionNote ?? "",
-    data: { approvalId },
-  });
-
-  if (approval.requestedByAgentId) {
-    await refreshLeadStatus(approval.requestedByAgentId);
-    if (decision === "rejected" && decisionNote) {
-      return sendToLead(approval.requestedByAgentId, `I rejected the plan "${approval.title}". ${decisionNote}\n\nPlease revise it.`);
-    }
-  }
-  return {};
+export async function decidePlan(approvalId: number, decision: "approved" | "rejected", note: string) {
+  return decide(approvalId, decision, note);
 }
 
 export async function setAgentModel(agentId: number, model: string): Promise<{ error?: string }> {
@@ -61,4 +37,20 @@ export async function setAgentModel(agentId: number, model: string): Promise<{ e
   await db.update(agents).set({ model }).where(eq(agents.id, agentId));
   revalidatePath("/dashboard/agents");
   return {};
+}
+
+export async function retrySubtask(subtaskId: number) {
+  return retrySubtaskRun(subtaskId);
+}
+
+export async function cancelTask(taskId: number) {
+  return cancelTaskRun(taskId);
+}
+
+export async function stopWorker(agentId: number) {
+  stopAgentRun(agentId);
+}
+
+export async function retryWorkspace(taskId: number) {
+  return retryWorkspaceRun(taskId);
 }

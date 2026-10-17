@@ -16,7 +16,7 @@ export default async function SettingsPage() {
         <p className="text-sm text-muted-foreground">The name, and the code your agents work on.</p>
       </div>
       {/* Keyed so the form resets when you switch projects */}
-      <ProjectSettingsForm key={project.id} projectId={project.id} name={project.name} repoPath={project.repoPath} devUrl={project.devUrl} />
+      <ProjectSettingsForm key={project.id} projectId={project.id} name={project.name} repoPath={project.repoPath} devUrl={project.devUrl} setupCommands={project.setupCommands} />
     </section>
   );
 }
