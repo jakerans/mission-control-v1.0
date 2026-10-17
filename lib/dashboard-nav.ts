@@ -12,7 +12,7 @@ export type NavItem = {
 
 export const NAV_ITEMS: NavItem[] = [
   { slug: "", label: "Office", description: "Watch your agents at work", Icon: Building2, ready: true },
-  { slug: "overview", label: "Overview", description: "Your project at a glance", Icon: LayoutGrid, ready: false },
+  { slug: "overview", label: "Overview", description: "What needs you, what the team is doing, and plan usage", Icon: LayoutGrid, ready: true },
   { slug: "agents", label: "Agents", description: "Your team, what each agent may do and what it is doing", Icon: Bot, ready: true },
   { slug: "tasks", label: "Tasks", description: "Approved work, what the team is doing, and what needs you", Icon: ListChecks, ready: true },
   { slug: "settings", label: "Settings", description: "Project name and code repository", Icon: Settings, ready: true },

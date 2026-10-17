@@ -1,11 +1,11 @@
-import { and, asc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, or } from "drizzle-orm";
 import { agents, approvals, artifacts, db, projects, tasks, type Agent, type Task } from "@/db";
 import { DEFAULT_MODEL } from "@/lib/agent-models";
 import { getPlanUsage } from "@/lib/plan-usage";
 import { refreshLeadStatus } from "@/lib/orchestrator/lead";
 import { activeRunCount, isAgentRunning, logEvent, settleOrphanedRuns, startSession, stopAgentRun } from "@/lib/orchestrator/session";
 import { reportResultTool, WORKER_DENIED, workerPrompt, workerTools, type WorkerReport } from "@/lib/orchestrator/workers";
-import { commitLeftovers, diffSummary, getToolchainEnv, prepareWorkspace } from "@/lib/orchestrator/workspace";
+import { commitLeftovers, diffSummary, getToolchainEnv, prepareWorkspace, removeWorkspace } from "@/lib/orchestrator/workspace";
 
 // The background worker loop. Every few seconds it:
 // 1. prepares a workspace (branch + worktree + setup) for each newly approved task;
@@ -19,10 +19,12 @@ const MAX_CONCURRENT = Math.max(1, Number(process.env.AGENT_MAX_CONCURRENT) || 3
 // Pause new work when the 5-hour plan window is this full (percent)
 const PAUSE_AT = Number(process.env.AGENT_PAUSE_AT_PERCENT) || 90;
 const WORKER_MAX_TURNS = 200;
+// After a failed workspace removal (e.g. a file still locked), wait this long before trying again
+const REMOVE_RETRY_MS = 10 * 60_000;
 
-type State = { timer: NodeJS.Timeout | null; ticking: boolean; preparing: Set<number>; pausedUntil: string | null };
+type State = { timer: NodeJS.Timeout | null; ticking: boolean; preparing: Set<number>; removing: Set<number>; removeFailedAt: Map<number, number>; pausedUntil: string | null };
 const globalForDispatcher = globalThis as unknown as { missionControlDispatcher?: State };
-const state = (globalForDispatcher.missionControlDispatcher ??= { timer: null, ticking: false, preparing: new Set(), pausedUntil: null });
+const state = (globalForDispatcher.missionControlDispatcher ??= { timer: null, ticking: false, preparing: new Set(), removing: new Set(), removeFailedAt: new Map(), pausedUntil: null });
 
 export function startDispatcher() {
   if (state.timer) return;
@@ -50,6 +52,7 @@ async function tick() {
   try {
     await prepareApprovedTasks();
     await dispatchSubtasks();
+    await cleanUpFinishedTasks();
   } catch (error) {
     console.error("[dispatcher] tick failed", error);
   } finally {
@@ -243,6 +246,37 @@ async function finishIfComplete(parentId: number) {
   if (parent.assignedAgentId) {
     await logEvent({ projectId: parent.projectId, taskId: parentId, agentId: parent.assignedAgentId, type: "task.ready", message: parent.title });
     await refreshLeadStatus(parent.assignedAgentId);
+  }
+}
+
+// Pushed or cancelled tasks no longer need their worktree. Waits until nobody is working in it
+// (a stopped agent may still be winding down).
+async function cleanUpFinishedTasks() {
+  const finished = await db
+    .select()
+    .from(tasks)
+    .where(and(isNull(tasks.parentId), inArray(tasks.status, ["done", "cancelled"]), isNotNull(tasks.worktreePath)));
+
+  for (const task of finished) {
+    if (state.removing.has(task.id) || Date.now() - (state.removeFailedAt.get(task.id) ?? 0) < REMOVE_RETRY_MS) continue;
+    const subtasks = await db.select({ status: tasks.status, agentId: tasks.assignedAgentId }).from(tasks).where(eq(tasks.parentId, task.id));
+    if (subtasks.some((s) => s.status === "working" || (s.agentId !== null && isAgentRunning(s.agentId) && s.status !== "done"))) continue;
+
+    state.removing.add(task.id);
+    void (async () => {
+      try {
+        const [project] = await db.select({ repoPath: projects.repoPath }).from(projects).where(eq(projects.id, task.projectId));
+        if (project?.repoPath) await removeWorkspace(project.repoPath, task.worktreePath!);
+        await db.update(tasks).set({ worktreePath: null }).where(or(eq(tasks.id, task.id), eq(tasks.parentId, task.id)));
+        await taskEvent(task, "workspace.removed", `Removed the workspace; the branch ${task.branch} is kept`);
+        state.removeFailedAt.delete(task.id);
+      } catch (error) {
+        state.removeFailedAt.set(task.id, Date.now());
+        console.error(`[dispatcher] couldn't remove the workspace for task ${task.id}`, error);
+      } finally {
+        state.removing.delete(task.id);
+      }
+    })();
   }
 }
 

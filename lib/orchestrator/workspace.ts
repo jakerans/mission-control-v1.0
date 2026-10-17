@@ -1,6 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -141,4 +141,21 @@ export async function commitLeftovers(dir: string, message: string) {
 export async function diffSummary(dir: string, base: string) {
   const [stat, log] = await Promise.all([git(dir, "diff", "--stat", `${base}...HEAD`), git(dir, "log", "--oneline", `${base}..HEAD`)]);
   return { stat, log };
+}
+
+// Deletes a task's worktree (its checkout and installed packages) once the task is over. The branch
+// stays in the repository, so the work can always be checked out again.
+export async function removeWorkspace(repoPath: string, dir: string) {
+  // Only ever delete inside Mission Control's worktree folder
+  const resolved = path.resolve(dir);
+  if (!resolved.startsWith(WORKTREES + path.sep)) throw new Error(`Refusing to delete ${dir}: not a Mission Control workspace`);
+
+  await git(repoPath, "worktree", "remove", "--force", resolved).catch(async () => {
+    // Windows can fail on very long paths inside node_modules; delete directly, then tidy git's records
+    await rm(resolved, { recursive: true, force: true, maxRetries: 3 });
+    await git(repoPath, "worktree", "prune");
+  });
+  // The per-task parent folder (<project>-<task>) is empty now
+  const parent = path.dirname(resolved);
+  if (parent !== WORKTREES) await rm(parent, { recursive: true, force: true }).catch(() => undefined);
 }

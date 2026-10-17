@@ -33,7 +33,8 @@ function resetLabel(iso: string | null) {
 
 // How much of the Claude plan the agents (and your own Claude Code use) have used, per limit window.
 // Hidden when agents aren't on the Claude plan.
-export function PlanUsageMeter({ expanded }: { expanded: boolean }) {
+// bare: just the windows, for placing inside another card
+export function PlanUsageMeter({ expanded, bare = false }: { expanded: boolean; bare?: boolean }) {
   const [usage, setUsage] = useState<Usage>(null);
 
   useEffect(() => {
@@ -51,7 +52,7 @@ export function PlanUsageMeter({ expanded }: { expanded: boolean }) {
     };
   }, []);
 
-  if (!usage) return null;
+  if (!usage) return bare ? <p className="text-sm text-muted-foreground">Usage appears once agents run on your Claude plan.</p> : null;
   const rows = WINDOWS.flatMap(({ key, label }) => {
     const w = usage.windows[key];
     return w && w.utilization !== null ? [{ key, label, pct: Math.min(100, Math.max(0, w.utilization)), reset: resetLabel(w.resetsAt) }] : [];
@@ -104,6 +105,15 @@ export function PlanUsageMeter({ expanded }: { expanded: boolean }) {
           {details}
         </TooltipContent>
       </Tooltip>
+    );
+  }
+
+  if (bare) {
+    return (
+      <div>
+        <p className="mb-3 text-xs text-muted-foreground">{plan}: shared with your own Claude use</p>
+        {details}
+      </div>
     );
   }
 
